@@ -1,0 +1,22 @@
+# Input matrices are regenerated with scripts/generate_inputs.py (hashes in data/manifest.json)
+data/dense/
+
+# Build output (Maven)
+target/
+*.class
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+
+# Logs of the Hazelcast members started by the harness
+logs/
+
+# Trial runs
+results/test/

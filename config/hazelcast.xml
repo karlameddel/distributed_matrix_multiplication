@@ -12,6 +12,8 @@
     <cluster-name>matmul</cluster-name>
 
     <properties>
+        <property name="hazelcast.phone.home.enabled">false</property>
+        <!-- A member listed without port is searched on 5701, 5702, ... (20 ports; default is only 3) -->
         <property name="hazelcast.tcp.join.port.try.count">20</property>
     </properties>
 
@@ -29,4 +31,16 @@
             <interface>127.0.0.1</interface>
         </interfaces>
     </network>
+
+    <!-- Strips of B for the current multiplication. They are temporary and rebuilt every run,
+         so no backup copies: a backup would only add extra transfers between members. -->
+    <map name="matrices">
+        <backup-count>0</backup-count>
+        <async-backup-count>0</async-backup-count>
+    </map>
+
+    <!-- Threads per member that run StripTasks. WorkerNode overrides it with its 2nd argument. -->
+    <executor-service name="matmul">
+        <pool-size>1</pool-size>
+    </executor-service>
 </hazelcast>

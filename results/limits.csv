@@ -1,0 +1,13 @@
+setup,largest_tested_ok_n,largest_attempted_n,first_failure
+dist 1x1,4000,4000,
+dist 1x8,4000,4000,
+dist 2x1,4000,4000,
+dist 2x4,4000,4000,
+dist 4x1,4000,4000,
+dist 4x2,4000,4000,
+dist 8x1,4000,4000,
+par 1,4000,4000,
+par 2,4000,4000,
+par 4,4000,4000,
+par 8,4000,4000,
+seq,4000,4000,

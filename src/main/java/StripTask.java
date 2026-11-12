@@ -11,28 +11,30 @@ import java.util.concurrent.Callable;
 /**
  * One distributed task: computes one strip of bs rows of C = A * B on a Hazelcast member.
  *
- * Data in the IMap MAP (written by the client before the tasks are submitted):
- *   key(job, "A", s) -> rows [s*bs, min((s+1)*bs, n)) of A, row-major
- *   key(job, "B", s) -> the same rows of B
- * The task is meant to be submitted with submitToKeyOwner(task, key(job, "A", s)), so it runs on
- * the member that owns its strip of A and reading A is local. B is needed in full: it is read once
- * per member and per job (cached in this JVM), so it crosses the cluster once per member, not once per task.
+ * Partitioning (1-D, by rows):
+ *   - A: the task carries its own strip of A (rows [strip*bs, min((strip+1)*bs, n))), so A is
+ *     scattered to the members together with the tasks.
+ *   - B: every strip needs all of B. The client stores B in the IMap MAP as row strips
+ *     key(job, "B", s). Each member reads B once per job and keeps it in this JVM, so B crosses
+ *     the cluster once per member, not once per task.
+ *   - C: the task returns its strip of C to the client inside a Result.
  *
  * The kernel is the same as ParallelBlocked.strip (same tiles, i-k-j order, float64), with the rows
  * renumbered from 0. For every C[i][j] the products are added in ascending k, so the result is
  * expected to be bit-identical to Blocked.
  */
-public final class StripTask implements Callable<double[]>, Serializable, HazelcastInstanceAware {
+public final class StripTask implements Callable<StripTask.Result>, Serializable, HazelcastInstanceAware {
     private static final long serialVersionUID = 1L;
 
     public static final String MAP = "matrices";
 
     private final String job;   // unique per multiplication, so the B cache never mixes two runs
     private final int strip, n, bs;
+    private final double[] a;   // this strip of A
     private transient HazelcastInstance hz;
 
-    public StripTask(String job, int strip, int n, int bs) {
-        this.job = job; this.strip = strip; this.n = n; this.bs = bs;
+    public StripTask(String job, int strip, int n, int bs, double[] a) {
+        this.job = job; this.strip = strip; this.n = n; this.bs = bs; this.a = a;
     }
 
     public static String key(String job, String matrix, int strip) {
@@ -45,12 +47,31 @@ public final class StripTask implements Callable<double[]>, Serializable, Hazelc
     }
 
     @Override
-    public double[] call() {
-        IMap<String, double[]> map = hz.getMap(MAP);
-        double[] a = map.get(key(job, "A", strip));
-        if (a == null) throw new IllegalStateException("missing " + key(job, "A", strip));
-        double[] b = fullB(map, job, n, bs);
-        return multiplyRows(a, b, n, bs);
+    public Result call() {
+        long t0 = System.nanoTime();
+        boolean[] fetched = new boolean[1];
+        double[] b = fullB(hz.<String, double[]>getMap(MAP), job, n, bs, fetched);
+        long t1 = System.nanoTime();
+        double[] c = multiplyRows(a, b, n, bs);
+        long t2 = System.nanoTime();
+        String member = hz.getCluster().getLocalMember().getAddress().toString();
+        return new Result(strip, c, member, Thread.currentThread().getName(), fetched[0], t1 - t0, t2 - t1);
+    }
+
+    /** What a task sends back: its strip of C and where / how long it ran (member-side clock). */
+    public static final class Result implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public final int strip;
+        public final double[] c;
+        public final String member, thread;
+        public final boolean fetchedB;   // true for the one task per member and job that read B from the IMap
+        public final long bNs;           // time to obtain B (read it, or wait for the task that reads it)
+        public final long computeNs;     // multiplyRows only
+
+        Result(int strip, double[] c, String member, String thread, boolean fetchedB, long bNs, long computeNs) {
+            this.strip = strip; this.c = c; this.member = member; this.thread = thread;
+            this.fetchedB = fetchedB; this.bNs = bNs; this.computeNs = computeNs;
+        }
     }
 
     // ---- B cache: one copy per member JVM and per job --------------------------------------------
@@ -58,7 +79,7 @@ public final class StripTask implements Callable<double[]>, Serializable, Hazelc
     private static String cachedJob;
     private static double[] cachedB;
 
-    private static synchronized double[] fullB(IMap<String, double[]> map, String job, int n, int bs) {
+    private static synchronized double[] fullB(IMap<String, double[]> map, String job, int n, int bs, boolean[] fetched) {
         if (!job.equals(cachedJob)) {
             cachedB = null;                                   // free the previous job's B first
             int strips = (n + bs - 1) / bs;
@@ -73,6 +94,7 @@ public final class StripTask implements Callable<double[]>, Serializable, Hazelc
             }
             cachedB = b;
             cachedJob = job;
+            fetched[0] = true;
         }
         return cachedB;
     }

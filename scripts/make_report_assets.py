@@ -20,6 +20,9 @@ Usage: python scripts/make_report_assets.py [--in-dir results]
 Writes into <in-dir>: summary_time.csv, scaling.csv, phases.csv, layouts.csv, data_volume.csv,
 memory.csv, setup.csv, limits.csv and time_vs_workers.png, speedup.png, efficiency.png, phases.png,
 layouts.png, memory.png.
+If <in-dir>/repeat*/raw_measurements.csv exist (independent repeat runs of some configurations in new
+JVM processes and new clusters), also repeat_check.csv: median of the main run and of every repeat run
+side by side, their ratio and the rank of each configuration within the same n in both runs.
 """
 import argparse
 from pathlib import Path
@@ -226,6 +229,29 @@ def main():
     ax.plot(d.total_threads, d.client_peak_mb / 1000, "s--", alpha=.6, label="dist: client only")
     log2_axis(ax, workers, "workers p", "peak memory (GB)", f"Peak memory, n = {nmax}")
     fig.tight_layout(); fig.savefig(rd / "memory.png", dpi=150); plt.close(fig)
+
+    # ------------------------------------------------------------------ independent repeat runs
+    reps = sorted(rd.glob("repeat*/raw_measurements.csv"))
+    if reps:
+        main_s = S.set_index(KEYS)
+        rows = []
+        for path in reps:
+            R = summarise(pd.read_csv(path))
+            for _, r in R.iterrows():
+                k = tuple(r[c] for c in KEYS)
+                if k not in main_s.index:
+                    continue
+                m0 = main_s.loc[k]
+                rows.append({"run": path.parent.name, "setup": label(r), "n": r.n,
+                             "main_median_s": m0["median"], "main_iqr_s": m0["iqr"],
+                             "repeat_median_s": r["median"], "repeat_iqr_s": r["iqr"],
+                             "repeat_over_main": r["median"] / m0["median"],
+                             "main_upload_s": m0["median_upload_s"], "repeat_upload_s": r["median_upload_s"]})
+        rc = pd.DataFrame(rows)
+        if len(rc):
+            rc["main_rank"] = rc.groupby(["run", "n"])["main_median_s"].rank().astype(int)
+            rc["repeat_rank"] = rc.groupby(["run", "n"])["repeat_median_s"].rank().astype(int)
+            rc.sort_values(["run", "n", "setup"]).to_csv(rd / "repeat_check.csv", index=False)
 
     print(f"Wrote tables and figures into {rd}")
 

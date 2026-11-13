@@ -1,4 +1,4 @@
-# Distributed Matrix Multiplication with Hazelcast
+# Distributed Matrix Multiplication
 
 **Big Data · Assignment 4 · Academic year 2026-2027**
 
